@@ -1,0 +1,160 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Multi-service serverless architecture containing an S3 static website,
+  DynamoDB persistence layer, least-privilege IAM execution role,
+  and Python Lambda compute function.
+
+Resources:
+
+  WebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "serverless-site-${AWS::AccountId}-${AWS::Region}"
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+
+  WebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebsiteBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadObjects
+            Effect: Allow
+            Principal: "*"
+            Action:
+              - s3:GetObject
+            Resource: !Sub "${WebsiteBucket.Arn}/*"
+
+  ApplicationTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ServerlessApplicationData
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: serverless-data-writer-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+      Policies:
+        - PolicyName: WriteApplicationTable
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: PutApplicationItem
+                Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !GetAtt ApplicationTable.Arn
+
+  ApplicationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: serverless-data-writer
+      Runtime: python3.12
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      MemorySize: 128
+      Timeout: 10
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ApplicationTable
+
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import uuid
+          import logging
+          from datetime import datetime, timezone
+
+          import boto3
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          dynamodb = boto3.resource("dynamodb")
+          table = dynamodb.Table(os.environ["TABLE_NAME"])
+
+
+          def lambda_handler(event, context):
+              logger.info("Received event: %s", json.dumps(event))
+
+              if not isinstance(event, dict):
+                  logger.error("Payload must be a JSON object")
+                  return {
+                      "statusCode": 400,
+                      "body": json.dumps({
+                          "error": "Payload must be a JSON object"
+                      })
+                  }
+
+              name = event.get("name")
+
+              if not isinstance(name, str) or not name.strip():
+                  logger.error("Missing or invalid name")
+                  return {
+                      "statusCode": 400,
+                      "body": json.dumps({
+                          "error": "A non-empty 'name' field is required"
+                      })
+                  }
+
+              item_id = str(uuid.uuid4())
+              timestamp = datetime.now(timezone.utc).isoformat()
+
+              item = {
+                  "id": item_id,
+                  "name": name.strip(),
+                  "timestamp": timestamp
+              }
+
+              table.put_item(Item=item)
+
+              logger.info("Stored item: %s", json.dumps(item))
+
+              return {
+                  "statusCode": 200,
+                  "body": json.dumps({
+                      "message": "Item stored successfully",
+                      "id": item_id,
+                      "timestamp": timestamp
+                  })
+              }
+
+Outputs:
+
+  WebsiteBucketName:
+    Description: S3 bucket containing the static website
+    Value: !Ref WebsiteBucket
+
+  ApplicationTableName:
+    Description: DynamoDB application table
+    Value: !Ref ApplicationTable
+
+  ApplicationFunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt ApplicationFunction.Arn
+
+  ApplicationFunctionName:
+    Description: Lambda function name
+    Value: !Ref ApplicationFunction
