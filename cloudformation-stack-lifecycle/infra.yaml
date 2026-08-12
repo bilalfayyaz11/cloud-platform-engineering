@@ -1,0 +1,27 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Provision local S3 infrastructure through AWS CloudFormation
+  using declarative Infrastructure as Code.
+
+Resources:
+
+  PrimaryDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "primary-data-${AWS::AccountId}-${AWS::Region}"
+
+  ArchiveDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "archive-data-${AWS::AccountId}-${AWS::Region}"
+
+Outputs:
+
+  PrimaryBucketName:
+    Description: Name of the primary S3 bucket
+    Value: !Ref PrimaryDataBucket
+
+  ArchiveBucketName:
+    Description: Name of the archive S3 bucket
+    Value: !Ref ArchiveDataBucket
